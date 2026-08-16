@@ -1,0 +1,39 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", "Noto Sans SC", system-ui, sans-serif;
+  --color-ink: #161513;
+  --color-paper: #f3efe6;
+  --color-pine: #2c5a43;
+  --color-pine-dark: #1c3b2c;
+  --color-copper: #b85c38;
+  --color-line: #ddd6c8;
+  --color-muted: #6e675c;
+}
+
+html {
+  font-size: 200%;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  appearance: textfield;
+}
