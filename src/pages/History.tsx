@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { ConfirmModal } from "../components/ConfirmModal";
+import { HistoryEditModal } from "../components/HistoryEditModal";
 import { Thumb } from "./Inventory";
 import { deleteHistory, fetchHistory, HISTORY_PAGE_SIZE } from "../lib/api";
 import { authErrorMessage, formatDateTime, formatNumber } from "../lib/format";
@@ -21,6 +22,7 @@ export function History() {
   const [error, setError] = useState("");
   const [pendingId, setPendingId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<HistoryRow | null>(null);
+  const [editing, setEditing] = useState<HistoryRow | null>(null);
 
   const totalPages = Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
 
@@ -73,7 +75,9 @@ export function History() {
       <div className="flex shrink-0 flex-wrap items-end justify-between gap-4">
         <div>
           <h2 className="text-2xl font-semibold">历史流水</h2>
-          <p className="mt-1 text-sm text-muted">发货与补货都会写入 history 表。删除流水时会回滚对应库存。</p>
+          <p className="mt-1 text-sm text-muted">
+            发货与补货都会写入 history 表。编辑或删除流水时会按差额同步更新库存。
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <select
@@ -157,14 +161,27 @@ export function History() {
                       <td className="px-4 py-3">{formatNumber(item.historical_saled_num)}</td>
                       <td className="px-4 py-3 text-right">
                         {index === 0 && (
-                          <button
-                            type="button"
-                            disabled={pendingId === row.id}
-                            onClick={() => setDeleting(row)}
-                            className="text-copper hover:underline disabled:opacity-50"
-                          >
-                            {pendingId === row.id ? "删除中…" : "删除"}
-                          </button>
+                          <div className="flex justify-end gap-3 whitespace-nowrap">
+                            <button
+                              type="button"
+                              disabled={pendingId === row.id}
+                              onClick={() => {
+                                setError("");
+                                setEditing(row);
+                              }}
+                              className="text-pine hover:underline disabled:opacity-50"
+                            >
+                              编辑
+                            </button>
+                            <button
+                              type="button"
+                              disabled={pendingId === row.id}
+                              onClick={() => setDeleting(row)}
+                              className="text-copper hover:underline disabled:opacity-50"
+                            >
+                              {pendingId === row.id ? "删除中…" : "删除"}
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -199,6 +216,20 @@ export function History() {
           <ChevronRight size={28} />
         </button>
       </div>
+
+      <HistoryEditModal
+        open={Boolean(editing)}
+        row={editing}
+        onClose={() => {
+          if (pendingId === null) setEditing(null);
+        }}
+        onSaved={async () => {
+          setEditing(null);
+          const result = await fetchHistory({ page, action, keyword });
+          setRows(result.rows);
+          setTotal(result.total);
+        }}
+      />
 
       <ConfirmModal
         open={Boolean(deleting)}

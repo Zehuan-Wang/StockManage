@@ -380,11 +380,17 @@ type StockSnapshot = {
   id: number;
   remain_num: number;
   historical_saled_num: number;
+  existed?: boolean;
 };
 
 async function restoreStock(snapshots: StockSnapshot[]): Promise<void> {
   const now = new Date().toISOString();
   for (const snap of snapshots) {
+    if (snap.existed === false) {
+      const { error } = await supabase.from("Stock").delete().eq("id", snap.id);
+      if (error) throw error;
+      continue;
+    }
     const { error } = await supabase
       .from("Stock")
       .update({
@@ -394,6 +400,188 @@ async function restoreStock(snapshots: StockSnapshot[]): Promise<void> {
       })
       .eq("id", snap.id);
     if (error) throw error;
+  }
+}
+
+export type HistoryUpdateEntry = {
+  id: number;
+  name: string;
+  picture_url: string | null;
+  quantity: number;
+};
+
+export async function updateHistory(id: number, entries: HistoryUpdateEntry[]): Promise<void> {
+  const selected = entries.filter((entry) => Number.isInteger(entry.quantity) && entry.quantity > 0);
+  if (selected.length === 0) {
+    throw new Error("请至少保留一件数量不为 0 的商品，或直接删除整条流水");
+  }
+
+  const seen = new Set<number>();
+  for (const entry of selected) {
+    if (seen.has(entry.id)) throw new Error(`商品「${entry.name}」重复，请合并数量`);
+    seen.add(entry.id);
+  }
+
+  const { data, error: readError } = await supabase
+    .from("history")
+    .select("id, goods")
+    .eq("id", id)
+    .maybeSingle();
+  if (readError) throw readError;
+  if (!data) throw new Error("流水不存在或已被删除");
+
+  const goods = parseHistoryGoods(data.goods);
+  if (!goods) throw new Error("流水数据无法解析，未更新库存");
+
+  const oldMap = new Map(goods.items.map((item) => [item.id, item]));
+  const newMap = new Map(selected.map((item) => [item.id, item]));
+  const allIds = new Set<number>([...oldMap.keys(), ...newMap.keys()]);
+
+  let unchanged = oldMap.size === newMap.size;
+  if (unchanged) {
+    for (const [gid, item] of newMap) {
+      const old = oldMap.get(gid);
+      if (!old || old.quantity !== item.quantity) {
+        unchanged = false;
+        break;
+      }
+    }
+  }
+  if (unchanged) return;
+
+  type Plan = {
+    id: number;
+    existed: boolean;
+    nextRemain: number;
+    nextSold: number;
+    snapshot: StockSnapshot;
+  };
+  const plans: Plan[] = [];
+  const shortages: string[] = [];
+  const stockState = new Map<number, { remain: number; sold: number }>();
+
+  for (const gid of allIds) {
+    const oldItem = oldMap.get(gid);
+    const newItem = newMap.get(gid);
+    const oldQty = oldItem?.quantity ?? 0;
+    const newQty = newItem?.quantity ?? 0;
+    const name = newItem?.name ?? oldItem?.name ?? String(gid);
+
+    const { data: stock, error: stockReadError } = await supabase
+      .from("Stock")
+      .select("id, remain_num, historical_saled_num")
+      .eq("id", gid)
+      .maybeSingle();
+    if (stockReadError) throw stockReadError;
+
+    const existed = Boolean(stock);
+    const remain = Number(stock?.remain_num ?? 0);
+    const sold = Number(stock?.historical_saled_num ?? 0);
+    stockState.set(gid, { remain, sold });
+
+    if (oldQty === newQty) continue;
+
+    if (goods.action === "shipment") {
+      if (!existed) {
+        shortages.push(`「${name}」没有库存记录，无法修改发货流水`);
+        continue;
+      }
+      const nextRemain = remain + oldQty - newQty;
+      const nextSold = sold - oldQty + newQty;
+      if (nextRemain < 0) {
+        shortages.push(
+          `「${name}」发货改为 ${newQty} 后库存将为 ${nextRemain}（当前库存 ${remain}，原流水 ${oldQty}）`,
+        );
+      }
+      if (nextSold < 0) {
+        shortages.push(`「${name}」累计销量不足，无法把发货数量从 ${oldQty} 改为 ${newQty}`);
+      }
+      plans.push({
+        id: gid,
+        existed: true,
+        nextRemain,
+        nextSold,
+        snapshot: { id: gid, remain_num: remain, historical_saled_num: sold, existed: true },
+      });
+    } else {
+      const nextRemain = remain - oldQty + newQty;
+      const nextSold = sold;
+      if (nextRemain < 0) {
+        shortages.push(`「${name}」当前库存 ${remain}，不足以把补货数量从 ${oldQty} 改为 ${newQty}`);
+        continue;
+      }
+      if (!existed && newQty <= 0) {
+        shortages.push(`「${name}」没有库存记录，无法撤销补货`);
+        continue;
+      }
+      plans.push({
+        id: gid,
+        existed,
+        nextRemain,
+        nextSold,
+        snapshot: { id: gid, remain_num: remain, historical_saled_num: sold, existed },
+      });
+    }
+  }
+
+  if (shortages.length > 0) {
+    throw new Error(shortages.join("；"));
+  }
+
+  const now = new Date().toISOString();
+  const snapshots = plans.map((plan) => plan.snapshot);
+
+  try {
+    for (const plan of plans) {
+      if (!plan.existed) {
+        const { error } = await supabase.from("Stock").insert({
+          id: plan.id,
+          remain_num: plan.nextRemain,
+          historical_saled_num: plan.nextSold,
+          updated_at: now,
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("Stock")
+          .update({
+            remain_num: plan.nextRemain,
+            historical_saled_num: plan.nextSold,
+            updated_at: now,
+          })
+          .eq("id", plan.id);
+        if (error) throw error;
+      }
+    }
+
+    const planById = new Map(plans.map((plan) => [plan.id, plan]));
+    const historyItems: HistoryGoodsItem[] = selected.map((entry) => {
+      const plan = planById.get(entry.id);
+      const state = stockState.get(entry.id);
+      return {
+        id: entry.id,
+        name: entry.name,
+        picture_url: entry.picture_url,
+        quantity: entry.quantity,
+        remain_num: plan?.nextRemain ?? state?.remain ?? 0,
+        historical_saled_num: plan?.nextSold ?? state?.sold ?? 0,
+      };
+    });
+
+    const { error } = await supabase
+      .from("history")
+      .update({
+        goods: { action: goods.action, items: historyItems },
+      })
+      .eq("id", id);
+    if (error) throw error;
+  } catch (err) {
+    try {
+      if (snapshots.length > 0) await restoreStock(snapshots);
+    } catch {
+      // keep original error
+    }
+    throw err;
   }
 }
 
