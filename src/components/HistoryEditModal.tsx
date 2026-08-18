@@ -256,9 +256,9 @@ export function HistoryEditModal({ open, row, onClose, onSaved }: Props) {
                         <td className="py-2 pr-3 text-muted">{formatNumber(oldQty.get(line.id) ?? 0)}</td>
                         <td className="py-2 pr-3">
                           <input
-                            type="number"
-                            min={0}
-                            step={1}
+                            type="text"
+                            inputMode="numeric"
+                            autoComplete="off"
                             value={line.quantity}
                             onChange={(event) =>
                               setLines((prev) =>

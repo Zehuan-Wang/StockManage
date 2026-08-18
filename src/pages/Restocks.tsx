@@ -113,9 +113,9 @@ export function Restocks() {
                   <td className="px-4 py-3">{formatNumber(item.historical_saled_num)}</td>
                   <td className="px-4 py-3">
                     <input
-                      type="number"
-                      min={0}
-                      step={1}
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="off"
                       value={quantities[item.id] ?? ""}
                       onChange={(event) =>
                         setQuantities((prev) => ({ ...prev, [item.id]: event.target.value }))
